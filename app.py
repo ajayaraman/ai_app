@@ -17,6 +17,8 @@ custom_styles = Style("""
     .status-online { @apply bg-green-100 text-green-800; }
     .status-away { @apply bg-yellow-100 text-yellow-800; }
     .status-not-available { @apply bg-red-100 text-red-800; }
+    .modal { @apply fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full; }
+    .modal-content { @apply relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white; }
 """)
 app, rt = fast_app(hdrs=(tailwind_cdn, custom_styles))
 
@@ -27,6 +29,42 @@ def status_badge(status):
         'Not Available': 'bg-red-100 text-red-800'
     }.get(status, 'bg-gray-100 text-gray-800')
     return Div(status, cls=f"px-2 inline-flex text-xs leading-5 font-semibold rounded-full {status_class}")
+
+@rt('/show_form')
+def add_user_form():
+    return Div(
+        Div(
+            H2("Add New User", cls="text-xl mb-4"),
+            Form(
+                Input(type="text", name="name", placeholder="Name", cls="w-full p-2 mb-2 border rounded"),
+                Input(type="email", name="email", placeholder="Email", cls="w-full p-2 mb-2 border rounded"),
+                Select(
+                    Option("Online", value="Online"),
+                    Option("Away", value="Away"),
+                    Option("Not Available", value="Not Available"),
+                    name="status",
+                    cls="w-full p-2 mb-2 border rounded"
+                ),
+                Button("Add User", type="submit", cls="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600"),
+                cls="space-y-4",
+                hx_post="/add_user",
+                hx_target="#usersTable tbody",
+                hx_swap="beforeend",
+                hx_on="htmx:afterRequest: this.reset()"
+            ),
+            Button("Close", cls="mt-4 bg-gray-300 hover:bg-gray-400 text-black font-bold py-2 px-4 rounded",
+                   hx_get="/close_modal",
+                   hx_target="#modal",
+                   hx_swap="outerHTML"),
+            cls="modal-content"
+        ),
+        id="modal",
+        cls="modal"
+    )
+
+@rt('/close_modal')
+def close_modal():
+    return Div(id="modal")
 
 @rt('/')
 def get():
@@ -55,37 +93,69 @@ def get():
 
     # Create the search input
     search_input = Input(type="text", id="searchInput", placeholder="Search by name or email", 
-                         cls="mb-4 p-2 border rounded w-full")
+                         cls="mb-4 p-2 border rounded w-full",
+                         hx_trigger="keyup changed delay:500ms",
+                         hx_get="/search",
+                         hx_target="#usersTable tbody")
 
-    # Add JavaScript for search functionality
-    search_script = Script("""
-        document.getElementById('searchInput').addEventListener('input', function() {
-            var input, filter, table, tr, tdName, tdEmail, i, txtValueName, txtValueEmail;
-            input = document.getElementById("searchInput");
-            filter = input.value.toUpperCase();
-            table = document.getElementById("usersTable");
-            tr = table.getElementsByTagName("tr");
-            for (i = 1; i < tr.length; i++) {  // Start from 1 to skip header
-                tdName = tr[i].getElementsByTagName("td")[1];  // Name column
-                tdEmail = tr[i].getElementsByTagName("td")[2];  // Email column
-                if (tdName && tdEmail) {
-                    txtValueName = tdName.textContent || tdName.innerText;
-                    txtValueEmail = tdEmail.textContent || tdEmail.innerText;
-                    if (txtValueName.toUpperCase().indexOf(filter) > -1 || txtValueEmail.toUpperCase().indexOf(filter) > -1) {
-                        tr[i].style.display = "";
-                    } else {
-                        tr[i].style.display = "none";
-                    }
-                }
-            }
-        });
-    """)
+    # Add button to show the form
+    add_button = Button("Add User", 
+                        cls="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded mb-4",
+                        hx_get="/show_form",
+                        hx_target="#modal",
+                        hx_swap="innerHTML")
 
     return Titled("User Database",
                   Div(H1("User Database", cls="text-3xl font-bold mb-4 text-gray-800"),
+                      add_button,
+                      Div(id="modal"),
                       search_input, 
                       table, 
-                      cls="container mx-auto p-4"),
-                  search_script)
+                      cls="container mx-auto p-4"))
+
+@rt('/add_user')
+def post(name: str, email: str, status: str):
+    # Connect to the SQLite database
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    
+    # Insert the new user into the database
+    cursor.execute("INSERT INTO users (name, email, status) VALUES (?, ?, ?)", (name, email, status))
+    conn.commit()
+    
+    # Get the ID of the newly inserted user
+    new_user_id = cursor.lastrowid
+    
+    # Close the database connection
+    conn.close()
+    
+    # Return the new row to be added to the table
+    return Tr(
+        Td(new_user_id),
+        Td(name),
+        Td(email),
+        Td(status_badge(status))
+    )
+
+@rt('/search')
+def search(searchInput: str):
+    conn = sqlite3.connect('users.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM users WHERE name LIKE ? OR email LIKE ?", 
+                   (f'%{searchInput}%', f'%{searchInput}%'))
+    users = cursor.fetchall()
+    
+    conn.close()
+    
+    return Tbody(
+        *(Tr(
+            Td(user['id']),
+            Td(user['name']),
+            Td(user['email']),
+            Td(status_badge(user['status']))
+        ) for user in users)
+    )
 
 serve()
